@@ -1,47 +1,48 @@
 from fastapi import FastAPI, HTTPException
 import requests
+import os
 from fastapi.responses import JSONResponse
 
 app = FastAPI()
-BYBIT_API = "https://api.bybit.com/v5/market/tickers?category=spot"
 
-# Supported timeframes (Bybit's interval codes)
-TIMEFRAMES = {
-    "1m": "1", "3m": "3", "5m": "5", "15m": "15", 
-    "30m": "30", "1h": "60", "2h": "120", "4h": "240", "1d": "D"
-}
+BYBIT_API = os.getenv("BYBIT_API", "https://api.bybit.com/v5/market/tickers?category=spot")
+TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "5"))  # seconds
+
+@app.get("/health")
+async def health_check():
+    return {"status": "OK"}
 
 @app.get("/analyze/{symbol}")
 async def analyze_symbol(symbol: str):
     try:
-        # Fetch precomputed indicators from Bybit
-        ticker_url = f"{BYBIT_API}&symbol={symbol}"
-        ticker_data = requests.get(ticker_url, timeout=5).json()
-        ticker = ticker_data["result"]["list"][0]
+        # Validate symbol
+        symbol = symbol.upper()
+        if symbol not in ["BTCUSDT", "BONKUSDT"]:
+            raise HTTPException(status_code=400, detail="Unsupported symbol")
 
-        # Fetch latest close price for each timeframe
-        results = {"symbol": symbol, "timeframes": {}}
-        for tf_name, tf_code in TIMEFRAMES.items():
-            kline_url = f"https://api.bybit.com/v5/market/kline?category=spot&symbol={symbol}&interval={tf_code}&limit=1"
-            kline_data = requests.get(kline_url, timeout=5).json()
-            latest_candle = kline_data["result"]["list"][0]
+        # Fetch data with timeout
+        response = requests.get(
+            f"{BYBIT_API}&symbol={symbol}",
+            timeout=TIMEOUT
+        )
+        response.raise_for_status()
+        ticker = response.json().get("result", {}).get("list", [{}])[0]
 
-            results["timeframes"][tf_name] = {
-                "close_price": latest_candle[4],  # Close price
-                "volume": latest_candle[5],       # Volume
-                "indicators": {
-                    "ema_50": ticker["ema50"],    # Global EMA (same for all timeframes)
-                    "ema_200": ticker["ema200"],
-                    "rsi": ticker["rsi"],
-                    "stoch_rsi_k": ticker["stochRsiK"],
-                    "stoch_rsi_d": ticker["stochRsiD"]
-                }
-            }
+        return JSONResponse({
+            "symbol": symbol,
+            "price": ticker.get("lastPrice"),
+            "ema_50": ticker.get("ema50"),
+            "ema_200": ticker.get("ema200"),
+            "rsi": ticker.get("rsi")
+        })
 
-        return JSONResponse(results)
-
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail="Bybit API timeout")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"API error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

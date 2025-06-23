@@ -1,5 +1,4 @@
-fastapi
-uvicorn
-requests
-pandas
-ta
+fastapi==0.95.2
+uvicorn==0.22.0
+requests==2.31.0
+gunicorn==20.1.0
